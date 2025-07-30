@@ -1,5 +1,7 @@
 local N = {}
 
+local RenderKnifeEvent = game.ReplicatedStorage.Remotes.RenderKnifeEvent
+
 local RunService = game:GetService('RunService')
 local currentThrowRuntime = nil
 
@@ -43,14 +45,21 @@ local function throw(toolHandle : BasePart, targetPosition : Vector3, orderedNam
 	throwingHandle.Name = orderedName
 	game:GetService('Debris'):AddItem(throwingHandle, 5)
 
-	local direction = -(throwingHandle.Position - targetPosition).Unit
-	throwingHandle.CFrame = CFrame.lookAt(throwingHandle.Position, targetPosition)
+        local direction = -(throwingHandle.Position - targetPosition).Unit
+        throwingHandle.CFrame = CFrame.lookAt(throwingHandle.Position, targetPosition)
 
 	local floatingForce = Instance.new('BodyForce', throwingHandle)
 	floatingForce.force = Vector3.new(0, workspace.Gravity * throwingHandle:GetMass(), 0)
 	local spin = Instance.new('BodyAngularVelocity', throwingHandle)
 	spin.angularvelocity = throwingHandle.CFrame:vectorToWorldSpace(Vector3.new(-10, 0, 0))
-	throwingHandle.AssemblyLinearVelocity = (direction * 72.5)
+        throwingHandle.AssemblyLinearVelocity = (direction * 72.5)
+
+        throwingHandle.Transparency = 1
+        if (throwingHandle:FindFirstChildOfClass("Decal")) then
+                throwingHandle:FindFirstChildOfClass("Decal").Transparency = 1
+        end
+
+        RenderKnifeEvent:FireAllClients(targetPosition, orderedName)
 
 	toolHandle.Transparency = 1
 	if (toolHandle:FindFirstChildOfClass("Decal")) then

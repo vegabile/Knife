@@ -8,6 +8,8 @@ local isCooldown = false
 local COOLDOWN = 2.6
 local MINIMUM_DISTANCE = 75
 local device = ""
+local RenderKnifeEvent = game.ReplicatedStorage.Remotes.RenderKnifeEvent
+local rendered = {}
 
 local function getDevice()
 	if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled and not UserInputService.MouseEnabled then
@@ -55,136 +57,142 @@ function getCenterScreenTargetPoint()
 	end
 end
 
+local function renderKnife(baseHandle : BasePart, targetPosition : Vector3, serverKnife : BasePart)
+        if (currentThrowRuntime) then
+                currentThrowRuntime:Disconnect()
+                currentThrowRuntime = nil
+        end
+
+        local throwingHandle : BasePart = baseHandle:Clone()
+        throwingHandle.Parent = game.Workspace.ThrownKnives
+        throwingHandle.Transparency = 0
+        local decal = throwingHandle:FindFirstChildOfClass("Decal")
+        if decal then
+                decal.Transparency = 0
+        end
+        game:GetService('Debris'):AddItem(throwingHandle, 5)
+
+        local direction = -(throwingHandle.Position - targetPosition).Unit
+        throwingHandle.CFrame = CFrame.lookAt(throwingHandle.Position, targetPosition)
+
+        local floatingForce = Instance.new('BodyForce', throwingHandle)
+        floatingForce.force = Vector3.new(0, workspace.Gravity * throwingHandle:GetMass(), 0)
+        local spin = Instance.new('BodyAngularVelocity', throwingHandle)
+        spin.angularvelocity = throwingHandle.CFrame:vectorToWorldSpace(Vector3.new(-10, 0, 0))
+        throwingHandle.AssemblyLinearVelocity = (direction * 72.5)
+
+        local function cleanupAndStick(hitPart, hitPosition, hitNormal)
+                if currentThrowRuntime then
+                        currentThrowRuntime:Disconnect()
+                        currentThrowRuntime = nil
+                end
+
+                if not throwingHandle or not throwingHandle.Parent then return end
+
+                if floatingForce and floatingForce.Parent then floatingForce:Destroy() end
+                if spin and spin.Parent then spin:Destroy() end
+
+                throwingHandle.AssemblyLinearVelocity = Vector3.zero
+                throwingHandle.AssemblyAngularVelocity = Vector3.zero
+                throwingHandle.CanTouch = false
+
+                if hitPart and hitPart.Parent and hitPosition and hitNormal then
+                        local STAB_DEPTH = 1.0
+                        local lookAtPosition = hitPosition + hitNormal
+                        local stabPosition = hitPosition - hitNormal * (throwingHandle.Size.Z / 2 - STAB_DEPTH)
+                        local baseCFrame = CFrame.lookAt(stabPosition, lookAtPosition)
+                        local rotation = CFrame.Angles(math.rad(45), 0, 0)
+                        throwingHandle.CFrame = baseCFrame * rotation
+                        local weld = Instance.new("WeldConstraint")
+                        weld.Part0 = throwingHandle
+                        weld.Part1 = hitPart
+                        weld.Parent = throwingHandle
+                elseif hitPart and hitPart.Parent then
+                        local weld = Instance.new("WeldConstraint")
+                        weld.Part0 = throwingHandle
+                        weld.Part1 = hitPart
+                        weld.Parent = throwingHandle
+                end
+        end
+
+        local raycastParams = RaycastParams.new()
+        raycastParams.FilterDescendantsInstances = {throwingHandle, baseHandle, serverKnife}
+        raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+
+        currentThrowRuntime = RunService.PreRender:Connect(function(dt)
+                for _, raycastPoint : Attachment in ipairs(throwingHandle:GetChildren()) do
+                        if raycastPoint:IsA("Attachment") and raycastPoint.Name == "DmgPoint" then
+                                local origin = raycastPoint.WorldPosition
+                                local velocity = throwingHandle.AssemblyLinearVelocity
+                                local finalRaycastResult = nil
+
+                                local predictiveRayResult = workspace:Raycast(origin, velocity.Unit * 3.5, raycastParams)
+
+                                if predictiveRayResult then
+                                        finalRaycastResult = predictiveRayResult
+                                else
+                                        local rayLength = velocity.Magnitude * dt
+                                        if rayLength >= 0.1 then
+                                                local mainRaycastResult = workspace:Raycast(origin, velocity.Unit * rayLength, raycastParams)
+                                                if mainRaycastResult then
+                                                        finalRaycastResult = mainRaycastResult
+                                                end
+                                        end
+                                end
+
+                                if finalRaycastResult then
+                                        local hitPart = finalRaycastResult.Instance
+                                        local position = finalRaycastResult.Position
+
+                                        if (throwingHandle.Position - position).Magnitude > 2.05 then
+                                                return
+                                        end
+
+                                        cleanupAndStick(finalRaycastResult.Instance, finalRaycastResult.Position, finalRaycastResult.Normal)
+                                end
+                        end
+                end
+        end)
+
+        return throwingHandle
+end
+
 local function throw(toolHandle : BasePart, isMobile : boolean)
-	local ShootRemote : RemoteFunction = toolHandle.Parent:WaitForChild("RequestThrow")
-	local character : Model = toolHandle.Parent.Parent
-	if not character:IsA("Model") then print("Character is not a model.") return end
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid then print("No humanoid present.") return end
-	
-	if (currentThrowRuntime) then
-		currentThrowRuntime:Disconnect()
-		currentThrowRuntime = nil
-	end
-	
-	local targetPosition
-	local animTrack : AnimationTrack = playThrowAnimation(character)
-	task.wait(1.25)
-	if (animTrack) then
-		animTrack:Stop()
-	end
-	if (isMobile) then
-		targetPosition = getCenterScreenTargetPoint()
-	end
-	
-	
-	local targetPosition = targetPosition or humanoid.TargetPoint
-	local orderedName = `{Players.LocalPlayer.Name:lower()}_{tostring(math.random(1, 10000))}`
-	local success, reason = ShootRemote:InvokeServer(targetPosition, orderedName)
-	if not success then warn("NOT SUCCESS") print(reason) return end
-	
-	local serverKnife : BasePart = game.Workspace.ThrownKnives:WaitForChild(orderedName)
-	
-	local throwingHandle : BasePart = toolHandle:Clone()
-	throwingHandle.Parent = game.Workspace.ThrownKnives
-	throwingHandle.Transparency = 0
-	local decal = throwingHandle:FindFirstChildOfClass("Decal")
-	if (decal) then
-		decal.Transparency = 0
-	end
-	game:GetService('Debris'):AddItem(throwingHandle, 5)
-	
-	local direction = -(throwingHandle.Position - targetPosition).Unit
-	throwingHandle.CFrame = CFrame.lookAt(throwingHandle.Position, targetPosition)
-	
-	local floatingForce = Instance.new('BodyForce', throwingHandle)
-	floatingForce.force = Vector3.new(0, workspace.Gravity * throwingHandle:GetMass(), 0)
-	local spin = Instance.new('BodyAngularVelocity', throwingHandle)
-	spin.angularvelocity = throwingHandle.CFrame:vectorToWorldSpace(Vector3.new(-10, 0, 0))
-	throwingHandle.AssemblyLinearVelocity = (direction * 72.5)
-		
-	local function cleanupAndStick(hitPart, hitPosition, hitNormal)
-		if currentThrowRuntime then
-			currentThrowRuntime:Disconnect()
-			currentThrowRuntime = nil
-		end
+        local ShootRemote : RemoteFunction = toolHandle.Parent:WaitForChild("RequestThrow")
+        local character : Model = toolHandle.Parent.Parent
+        if not character:IsA("Model") then return end
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid then return end
 
-		if not throwingHandle or not throwingHandle.Parent then return end
+        local targetPosition
+        local animTrack : AnimationTrack = playThrowAnimation(character)
+        task.wait(1.25)
+        if animTrack then
+                animTrack:Stop()
+        end
+        if isMobile then
+                targetPosition = getCenterScreenTargetPoint()
+        end
 
-		if floatingForce and floatingForce.Parent then floatingForce:Destroy() end
-		if spin and spin.Parent then spin:Destroy() end
+        targetPosition = targetPosition or humanoid.TargetPoint
+        local orderedName = `{Players.LocalPlayer.Name:lower()}_{tostring(math.random(1, 10000))}`
+        local success = ShootRemote:InvokeServer(targetPosition, orderedName)
+        if not success then return end
 
-		throwingHandle.AssemblyLinearVelocity = Vector3.zero
-		throwingHandle.AssemblyAngularVelocity = Vector3.zero
-		throwingHandle.CanTouch = false
+        local serverKnife : BasePart = game.Workspace.ThrownKnives:WaitForChild(orderedName)
 
-		if hitPart and hitPart.Parent and hitPosition and hitNormal then
-			local STAB_DEPTH = 1.0
-			local lookAtPosition = hitPosition + hitNormal
+        rendered[orderedName] = true
+        renderKnife(toolHandle, targetPosition, serverKnife)
 
-			local stabPosition = hitPosition - hitNormal * (throwingHandle.Size.Z / 2 - STAB_DEPTH)
-			local baseCFrame = CFrame.lookAt(stabPosition, lookAtPosition)
-			local rotation = CFrame.Angles(math.rad(45), 0, 0)
+        if serverKnife then
+                serverKnife.LocalTransparencyModifier = 1
+                local d = serverKnife:FindFirstChildOfClass("Decal")
+                if d then
+                        d.Transparency = 1
+                end
+        end
 
-			throwingHandle.CFrame = baseCFrame * rotation
-
-			local weld = Instance.new("WeldConstraint")
-			weld.Part0 = throwingHandle
-			weld.Part1 = hitPart
-			weld.Parent = throwingHandle
-		elseif hitPart and hitPart.Parent then
-			local weld = Instance.new("WeldConstraint")
-			weld.Part0 = throwingHandle
-			weld.Part1 = hitPart
-			weld.Parent = throwingHandle
-		end
-	end
-	
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterDescendantsInstances = {throwingHandle, character, toolHandle, serverKnife}
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	
-	currentThrowRuntime = RunService.PreRender:Connect(function(dt)
-		for _, raycastPoint : Attachment in ipairs(throwingHandle:GetChildren()) do
-			if (raycastPoint:IsA("Attachment") and raycastPoint.Name == "DmgPoint") then
-				local origin = raycastPoint.WorldPosition
-				local velocity = throwingHandle.AssemblyLinearVelocity
-				local finalRaycastResult = nil
-
-				local predictiveRayResult = workspace:Raycast(origin, velocity.Unit * 3.5, raycastParams)
-
-				if predictiveRayResult then
-					finalRaycastResult = predictiveRayResult
-				else
-					local rayLength = velocity.Magnitude * dt
-					if rayLength >= 0.1 then
-						local mainRaycastResult = workspace:Raycast(origin, velocity.Unit * rayLength, raycastParams)
-						if mainRaycastResult then
-							finalRaycastResult = mainRaycastResult
-						end
-					end
-				end
-
-				if finalRaycastResult then
-					local hitPart = finalRaycastResult.Instance
-					local position = finalRaycastResult.Position
-					print("WAS HIT SOMETHING!", hitPart, position,'WAS ALL IT')
-
-					if (throwingHandle.Position - position).Magnitude > 2.05 then
-						return
-					end
-
-					local hitModel = hitPart:FindFirstAncestorOfClass("Model")
-					local hitHumanoid = hitModel and hitModel:FindFirstChildOfClass("Humanoid")
-
-					print("DETECTION!")
-					cleanupAndStick(finalRaycastResult.Instance, finalRaycastResult.Position, finalRaycastResult.Normal)
-				end
-			end
-		end
-	end)
-	
-	return throwingHandle, orderedName
+        return orderedName
 end
 
 local sideHUD = game.Players.LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("SideCombatHUD")
@@ -238,8 +246,8 @@ function N.Script(tool : Tool)
 			end
 			lastHit = tick()
 			
-			local throwingHandle, orderedName = throw(Handle)
-			if not orderedName then return end
+                        local orderedName = throw(Handle)
+                        if not orderedName then return end
 			
 			local serverKnife : BasePart = game.Workspace.ThrownKnives:WaitForChild(orderedName)
 			if (serverKnife) then
@@ -252,8 +260,8 @@ function N.Script(tool : Tool)
 	end)
 	
 	SideThrowButton.MouseButton1Up:Connect(function()
-		local throwingHandle, orderedName = throw(Handle, true)
-		local serverKnife : BasePart = game.Workspace.ThrownKnives:WaitForChild(orderedName)
+                local orderedName = throw(Handle, true)
+                local serverKnife : BasePart = game.Workspace.ThrownKnives:WaitForChild(orderedName)
 		if (serverKnife) then
 			serverKnife.LocalTransparencyModifier = 1
 			if (serverKnife:FindFirstChildOfClass("Decal")) then
@@ -266,12 +274,19 @@ function N.Script(tool : Tool)
 end
 
 game.Workspace.ThrownKnives.ChildAdded:Connect(function(child)
-	if (child.Name:find(Players.LocalPlayer.Name:lower())) then
-		child.LocalTransparencyModifier = 1
-		if (child:FindFirstChildOfClass("Decal")) then
-			child:FindFirstChildOfClass("Decal"):Destroy()
-		end
-	end
+        if (child.Name:find(Players.LocalPlayer.Name:lower())) then
+                child.LocalTransparencyModifier = 1
+                if (child:FindFirstChildOfClass("Decal")) then
+                        child:FindFirstChildOfClass("Decal"):Destroy()
+                end
+        end
+end)
+
+RenderKnifeEvent.OnClientEvent:Connect(function(targetPosition, orderedName)
+        if rendered[orderedName] then return end
+        local serverKnife = game.Workspace.ThrownKnives:WaitForChild(orderedName)
+        rendered[orderedName] = true
+        renderKnife(serverKnife, targetPosition, serverKnife)
 end)
 
 return N
